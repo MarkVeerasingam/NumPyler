@@ -40,7 +40,10 @@ def get_cached_engine_and_function(operation="vector_mul"):
     
     # Get function pointer and create ctypes function
     func_ptr = engine.get_function_address("vector_mul")
-    cfunc = ctypes.CFUNCTYPE(None, ctypes.POINTER(MemRefDescriptor), ctypes.c_int)(func_ptr)
+    cfunc = ctypes.CFUNCTYPE(None,
+                        ctypes.POINTER(MemRefDescriptor),
+                        ctypes.POINTER(MemRefDescriptor),
+                        ctypes.POINTER(MemRefDescriptor))(func_ptr)
     
     # Cache everything
     _engine_cache[operation] = (engine, mod, cfunc)
@@ -48,28 +51,31 @@ def get_cached_engine_and_function(operation="vector_mul"):
     
     return _engine_cache[operation]
 
-def fast_compile_and_run(traced_array, scalar):
-    """Optimized version that reuses cached LLVM resources"""
-    # Get cached engine and function (expensive operations cached)
+def fast_compile_and_run(traced_array_a, traced_array_b):
     engine, mod, cfunc = get_cached_engine_and_function()
-    
-    # Fast path: direct numpy array processing
-    if hasattr(traced_array, 'data') and isinstance(traced_array.data, np.ndarray):
-        arr = traced_array.data.copy()  # Work on copy
-    else:
-        arr = traced_array.realize()
-    
-    # Convert to memref (this is still expensive but unavoidable)
-    memref = numpy_to_memref(arr)
-    
-    # Execute the compiled function
-    cfunc(ctypes.byref(memref), scalar)
-    
-    return arr
 
-def compile_and_run(traced_array, scalar):
-    """Original function - now calls the fast version"""
-    return fast_compile_and_run(traced_array, scalar)
+    # Prepare input arrays (copies)
+    arr_a = traced_array_a.data.copy() if hasattr(traced_array_a, 'data') else traced_array_a.realize()
+    arr_b = traced_array_b.data.copy() if hasattr(traced_array_b, 'data') else traced_array_b.realize()
+
+    # Create output array
+    out = np.empty_like(arr_a)
+
+    # Convert numpy arrays to memrefs
+    a_memref = numpy_to_memref(arr_a)
+    b_memref = numpy_to_memref(arr_b)
+    out_memref = numpy_to_memref(out)
+
+    # Call the LLVM compiled function
+    cfunc(ctypes.byref(a_memref), ctypes.byref(b_memref), ctypes.byref(out_memref))
+
+    return out
+
+def compile_and_run(a_memref, b_memref, out_memref):
+    # We can do the same as fast_compile_and_run but with memrefs directly
+    engine, mod, cfunc = get_cached_engine_and_function()
+    cfunc(ctypes.byref(a_memref), ctypes.byref(b_memref), ctypes.byref(out_memref))
+
 
 # Utility to clear cache if needed
 def clear_llvm_cache():

@@ -79,38 +79,44 @@ def compile(func):
             def compiled_func(*runtime_args):
                 func_start = time.perf_counter()
                 
-                # Find which argument is the array and which is the scalar
-                array_arg = None
-                scalar_arg = None
+                # Extract input arrays
+                arrays = [arg for arg in runtime_args if isinstance(arg, np.ndarray)]
+                if len(arrays) != 2:
+                    print("[WARNING] Falling back to NumPy: expects exactly two arrays")
+                    return func(*runtime_args)
                 
-                for arg in runtime_args:
-                    if isinstance(arg, np.ndarray):
-                        array_arg = arg
-                    elif isinstance(arg, (int, float)):
-                        scalar_arg = arg
+                a, b = arrays
+                # Check shape compatibility
+                if a.shape != b.shape:
+                    raise ValueError("Input arrays must have the same shape")
                 
-                if array_arg is not None and scalar_arg is not None:
-                    # Time the actual compiled execution
-                    traced_result = TracedArray(array_arg.copy())  # Copy to avoid modifying original
-                    llvm_start = time.perf_counter()
-                    result = compile_and_run(traced_result, scalar_arg)
-                    llvm_time = time.perf_counter() - llvm_start
-                    
-                    func_time = time.perf_counter() - func_start
-                    
-                    if not hasattr(compiled_func, '_exec_count'):
-                        compiled_func._exec_count = 0
-                    compiled_func._exec_count += 1
-                    
-                    if compiled_func._exec_count <= 3:
-                        print(f"[TIMING] Compiled func overhead: {(func_time-llvm_time)*1000:.3f}ms, "
-                              f"LLVM execution: {llvm_time*1000:.3f}ms")
-                    
-                    return result
-                else:
-                    # Fallback to numpy
-                    print(f"[WARNING] Falling back to NumPy")
-                    return func(*runtime_args, **kwargs)
+                # Prepare output array
+                out = np.empty_like(a)
+                
+                # Convert inputs and output to memrefs
+                from numpyler.runtime import numpy_to_memref
+                a_memref = numpy_to_memref(a)
+                b_memref = numpy_to_memref(b)
+                out_memref = numpy_to_memref(out)
+                
+                # Call the compiled LLVM function here
+                # Assume `compile_and_run` takes memrefs and runs the compiled LLVM function
+                llvm_start = time.perf_counter()
+                compile_and_run(a_memref, b_memref, out_memref)
+                llvm_time = time.perf_counter() - llvm_start
+                
+                func_time = time.perf_counter() - func_start
+                
+                if not hasattr(compiled_func, '_exec_count'):
+                    compiled_func._exec_count = 0
+                compiled_func._exec_count += 1
+                
+                if compiled_func._exec_count <= 3:
+                    print(f"[TIMING] Compiled func overhead: {(func_time-llvm_time)*1000:.3f}ms, "
+                        f"LLVM execution: {llvm_time*1000:.3f}ms")
+                
+                return out
+
             
             compile_time = time.perf_counter() - compile_start
             print(f"[TIMING] Function creation took: {compile_time*1000:.3f}ms")
