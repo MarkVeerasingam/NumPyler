@@ -6,6 +6,8 @@ from numpyler.tracing import TracedArray
 def dtype_to_llvm(dtype):
     if dtype == np.int32:
         return ir.IntType(32)
+    elif dtype == np.int64:
+        return ir.IntType(64)
     elif dtype == np.float32:
         return ir.FloatType()
     elif dtype == np.float64:
