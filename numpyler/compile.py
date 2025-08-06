@@ -1,17 +1,30 @@
+# numpyler/compile.py
+from collections import OrderedDict
 import time
-from functools import wraps
-from numpyler.tracing import TracedArray, dump_trace
-from numpyler.compiler.runner import compile_and_run
+import hashlib
 import numpy as np
+from functools import wraps
+from numpyler.tracing import TracedArray, dump_trace, collect_nodes
+from numpyler.compiler.runner import compile_and_run
+from numpyler.compiler.ir_generation import generate_fused_ir
 
 _compile_cache = {}
+
+def is_constant(x):
+    return isinstance(x, (int, float)) or (isinstance(x, TracedArray) and 
+           (isinstance(x.data, (int, float)) or x.data.ndim == 0))
+
+def get_constant_value(x):
+    if isinstance(x, TracedArray):
+        return x.data.item() if x.data.ndim == 0 else x.data
+    return x
 
 def compile(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         total_start = time.perf_counter()
         
-        # Create cache key from input types/shapes before tracing
+        # Create cache key
         cache_key_parts = []
         for arg in args:
             if isinstance(arg, np.ndarray):
@@ -22,116 +35,79 @@ def compile(func):
                 cache_key_parts.append(('other', type(arg)))
         
         cache_key = (func.__name__, tuple(cache_key_parts))
-        key_time = time.perf_counter()
         
-        # If we have a cached compiled version, use it directly
+        # Try cache
         if cache_key in _compile_cache:
-            cache_lookup_time = time.perf_counter() - key_time
             compiled_func = _compile_cache[cache_key]
-            
-            exec_start = time.perf_counter()
             result = compiled_func(*args, **kwargs)
-            exec_time = time.perf_counter() - exec_start
-            
-            total_time = time.perf_counter() - total_start
-            
-            # Only print timing for first few calls to avoid spam
-            if not hasattr(wrapper, '_call_count'):
-                wrapper._call_count = 0
-            wrapper._call_count += 1
-            
-            if wrapper._call_count <= 3:
-                print(f"[TIMING] Cache lookup: {cache_lookup_time*1000:.3f}ms, "
-                      f"Execution: {exec_time*1000:.3f}ms, "
-                      f"Total: {total_time*1000:.3f}ms")
-            
             return result
         
-        # First time - trace the function to understand the operation
+        # Tracing
         trace_start = time.perf_counter()
         traced_args = [
-            TracedArray(arg) if isinstance(arg, (np.ndarray, int, float)) else arg
-            for arg in args
+            TracedArray(arg, original_index=i) if isinstance(arg, (np.ndarray, int, float)) else arg
+            for i, arg in enumerate(args)
         ]
         result = func(*traced_args, **kwargs)
+        
+        if not isinstance(result, TracedArray) or not result.trace_node:
+            return result.data if isinstance(result, TracedArray) else result
+        
+        # Collect computation graph
+        nodes = collect_nodes(result)
+        print("\n[TRACING] Computation Graph:")
         dump_trace(result)
-        trace_time = time.perf_counter() - trace_start
-
-        if isinstance(result, TracedArray) and result.trace_node:
-            print(f"[COMPILE] Compiling new function for key {cache_key}")
-            print(f"[TIMING] Tracing took: {trace_time*1000:.3f}ms")
+        leaf_arrays = OrderedDict()
+        
+        # Collect leaf arrays and constants
+        for node in nodes:
+            for inp in node.inputs:
+                if isinstance(inp, TracedArray):
+                    if inp.trace_node is None and not is_constant(inp):
+                        leaf_arrays[inp.original_index] = inp
+        
+        # Create mapping from original index to leaf position
+        index_map = {}
+        for idx, (orig_idx, leaf) in enumerate(leaf_arrays.items()):
+            index_map[orig_idx] = idx
+        
+        # Ordered by original argument position
+        leaf_arrays = list(leaf_arrays.values())
+        
+        # Generate fused IR
+        output_dtype = result.data.dtype
+        output_shape = result.data.shape
+        
+        # Create unique function name
+        func_hash = hashlib.md5(repr(cache_key).encode()).hexdigest()[:8]
+        func_name = f"fused_{func_hash}"
+        
+        ir_code = generate_fused_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name, index_map)
+        print("\n[TRACING] Generated IR:")
+        print(ir_code)
+        
+        # Create compiled function
+        def compiled_func(*runtime_args):
+            # Prepare inputs in order
+            input_arrays = []
+            for leaf in leaf_arrays:
+                idx = leaf.original_index
+                input_arrays.append(runtime_args[idx])
             
-           # Extract the final operation
-            final_node = result.trace_node
-            op_name = final_node.op_name
-            op_inputs = final_node.inputs
-
-            # Unwrap arguments from the trace
-            lhs = op_inputs[0]
-            rhs = op_inputs[1]
-
-            lhs_val = lhs.data if isinstance(lhs, TracedArray) else lhs
-            rhs_val = rhs.data if isinstance(rhs, TracedArray) else rhs
-
-            compile_start = time.perf_counter()
+            # Create output array
+            out = np.empty(output_shape, dtype=output_dtype)
             
-            # Create the compiled function
-            def compiled_func(*runtime_args):
-                func_start = time.perf_counter()
-                
-                # Extract input arrays
-                arrays = [arg for arg in runtime_args if isinstance(arg, np.ndarray)]
-                if len(arrays) != 2:
-                    print("[WARNING] Falling back to NumPy: expects exactly two arrays")
-                    return func(*runtime_args)
-                
-                a, b = arrays
-                # Check shape compatibility
-                if a.shape != b.shape:
-                    raise ValueError("Input arrays must have the same shape")
-                
-                # Prepare output array
-                out = np.empty_like(a)
-                
-                # Convert inputs and output to memrefs
-                from numpyler.runtime import numpy_to_memref
-                a_memref = numpy_to_memref(a)
-                b_memref = numpy_to_memref(b)
-                out_memref = numpy_to_memref(out)
-                
-                # Call the compiled LLVM function here
-                # Assume `compile_and_run` takes memrefs and runs the compiled LLVM function
-                llvm_start = time.perf_counter()
-                compile_and_run(a_memref, b_memref, out_memref)
-                llvm_time = time.perf_counter() - llvm_start
-                
-                func_time = time.perf_counter() - func_start
-                
-                if not hasattr(compiled_func, '_exec_count'):
-                    compiled_func._exec_count = 0
-                compiled_func._exec_count += 1
-                
-                if compiled_func._exec_count <= 3:
-                    print(f"[TIMING] Compiled func overhead: {(func_time-llvm_time)*1000:.3f}ms, "
-                        f"LLVM execution: {llvm_time*1000:.3f}ms")
-                
-                return out
-
+            # Convert to memrefs
+            from numpyler.runtime import numpy_to_memref
+            input_memrefs = [numpy_to_memref(arr) for arr in input_arrays]
+            out_memref = numpy_to_memref(out)
             
-            compile_time = time.perf_counter() - compile_start
-            print(f"[TIMING] Function creation took: {compile_time*1000:.3f}ms")
-            
-            _compile_cache[cache_key] = compiled_func
-            
-            exec_start = time.perf_counter()
-            final_result = compiled_func(*args, **kwargs)
-            exec_time = time.perf_counter() - exec_start
-            
-            total_time = time.perf_counter() - total_start
-            print(f"[TIMING] First execution: {exec_time*1000:.3f}ms, "
-                  f"Total first call: {total_time*1000:.3f}ms")
-            
-            return final_result
-
-        raise RuntimeError("No trace found — was the input traced?")
+            # Execute
+            compile_and_run(input_memrefs, out_memref, ir_code=ir_code, func_name=func_name)
+            return out
+        
+        # Cache and return
+        _compile_cache[cache_key] = compiled_func
+        return compiled_func(*args, **kwargs)
+    
     return wrapper
