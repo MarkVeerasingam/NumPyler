@@ -55,8 +55,8 @@ def compile(func):
         
         # Collect computation graph
         nodes = collect_nodes(result)
-        print("\n[TRACING] Computation Graph:")
-        dump_trace(result)
+        # print("\n[TRACING] Computation Graph:")
+        # dump_trace(result)
         leaf_arrays = OrderedDict()
         
         # Collect leaf arrays and constants
@@ -83,9 +83,8 @@ def compile(func):
         func_name = f"fused_{func_hash}"
         
         ir_code = generate_fused_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name, index_map)
-        print("\n[TRACING] Generated IR:")
-        print(ir_code)
-        
+        # print("\n[TRACING] Generated IR:")
+        # print(ir_code)
         # Create compiled function
         def compiled_func(*runtime_args):
             # Prepare inputs in order

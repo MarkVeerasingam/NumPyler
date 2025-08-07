@@ -1,4 +1,3 @@
-# numpyler/compiler/ir_generation.py
 import numpy as np
 from llvmlite import ir
 from numpyler.tracing import TracedArray
@@ -14,6 +13,33 @@ def dtype_to_llvm(dtype):
         return ir.DoubleType()
     else:
         raise ValueError(f"Unsupported dtype: {dtype}")
+
+def promote_inputs(builder, vals, input_types, output_type):
+    """
+    Promote input values to output_type to ensure consistent operation types.
+    Handles integer to float conversion as needed.
+    
+    Args:
+        builder: LLVM IRBuilder instance.
+        vals: list of LLVM values (inputs).
+        input_types: list of LLVM types of the input values.
+        output_type: LLVM type of the output (target type).
+        
+    Returns:
+        List of promoted LLVM values, all matching output_type.
+    """
+    promoted = []
+    for val, in_ty in zip(vals, input_types):
+        if in_ty == output_type:
+            promoted.append(val)
+        else:
+            # Promote integer to float if output_type is float
+            if isinstance(in_ty, ir.IntType) and isinstance(output_type, (ir.FloatType, ir.DoubleType)):
+                promoted.append(builder.sitofp(val, output_type))
+            # Demote float to int is not usual, but could add here if needed
+            else:
+                promoted.append(val)  # fallback, no promotion
+    return promoted
 
 def generate_fused_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name, index_map):
     # Create LLVM module
@@ -74,20 +100,28 @@ def generate_fused_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name,
     
     # Load input values
     input_values = []
+    input_types = []
     llvm_type = dtype_to_llvm(output_dtype)
     for i, arg in enumerate(input_args):
+        actual_input_dtype = leaf_arrays[i].data.dtype
+        input_llvm_type = dtype_to_llvm(actual_input_dtype)
+
         # Get aligned pointer
         aligned_ptr = builder.gep(arg, [ir.Constant(int32, 0), ir.Constant(int32, 1)])
         aligned = builder.load(aligned_ptr)
         
         # Cast to data type
-        data_ptr = builder.bitcast(aligned, llvm_type.as_pointer())
+        data_ptr = builder.bitcast(aligned, input_llvm_type.as_pointer())
         
         # Get element pointer
         elem_ptr = builder.gep(data_ptr, [phi])
         val = builder.load(elem_ptr)
         input_values.append(val)
+        input_types.append(input_llvm_type)
     
+    # Promote inputs to output type
+    input_values = promote_inputs(builder, input_values, input_types, llvm_type)
+
     # Process operation nodes
     val_count = 0
     node_registers = {}
@@ -101,8 +135,17 @@ def generate_fused_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name,
                 pos = index_map[inp.original_index]
                 input_vals.append(input_values[pos])
             elif isinstance(inp, (int, float)):
-                input_vals.append(ir.Constant(llvm_type, inp))
+                # Promote constants to output LLVM type
+                if isinstance(llvm_type, ir.IntType):
+                    input_vals.append(ir.Constant(llvm_type, int(inp)))
+                else:
+                    input_vals.append(ir.Constant(llvm_type, float(inp)))
         
+        # Promote operands to output type 
+        # Note: constants already promoted above
+        # For nodes inputs from registers, types should already match, but double check:
+        # Could add promotion here if needed
+
         if node.op_name == "add":
             if isinstance(llvm_type, ir.IntType):
                 res = builder.add(input_vals[0], input_vals[1], name=f"v{val_count}")
@@ -119,10 +162,15 @@ def generate_fused_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name,
             else:
                 res = builder.fsub(input_vals[0], input_vals[1], name=f"v{val_count}")
         elif node.op_name == "divide":
-            if isinstance(llvm_type, ir.IntType):
-                res = builder.sdiv(input_vals[0], input_vals[1], name=f"v{val_count}")
-            else:
-                res = builder.fdiv(input_vals[0], input_vals[1], name=f"v{val_count}")
+            # Always perform floating point division
+            fp_type = ir.DoubleType() if output_dtype == np.float64 else ir.FloatType()
+            def to_fp(val, val_type):
+                if isinstance(val_type, ir.IntType):
+                    return builder.sitofp(val, fp_type)
+                return val
+            val0 = to_fp(input_vals[0], llvm_type)
+            val1 = to_fp(input_vals[1], llvm_type)
+            res = builder.fdiv(val0, val1, name=f"v{val_count}")
         else:
             raise ValueError(f"Unsupported operation: {node.op_name}")
         
