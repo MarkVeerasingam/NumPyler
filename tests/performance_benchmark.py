@@ -1,6 +1,6 @@
 import numpy as np
 import timeit
-from numpyler.compile import compile
+from numpyler import compile
 
 # Compiled functions using explicit numpy ufuncs
 @compile

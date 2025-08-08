@@ -1,5 +1,5 @@
 import numpy as np
-from numpyler.compile import compile
+from numpyler import compile
 
 @compile
 def eq(a, b, c, d):
