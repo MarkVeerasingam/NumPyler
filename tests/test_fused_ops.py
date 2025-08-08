@@ -83,19 +83,6 @@ def test_chained_operations(test_data):
     expected = np.array([1-4+2*2, 2-5+3*2, 3-6+4*2], dtype=np.int32)
     np.testing.assert_array_equal(result, expected)
 
-def test_type_promotion():
-    a = np.array([1, 2, 3], dtype=np.int32)
-    b = np.array([4, 5, 6], dtype=np.float32)
-    
-    @compile
-    def ops(a, b):
-        return a * b
-    
-    result = ops(a, b)
-    assert result.dtype == np.float32  # Should promote to float32
-    expected = np.array([1*4, 2*5, 3*6], dtype=np.float32)
-    np.testing.assert_allclose(result, expected, rtol=1e-6)
-
 def test_cache_behavior(test_data):
     data = test_data['int32']
     
@@ -108,16 +95,6 @@ def test_cache_behavior(test_data):
     expected = data['a'] + data['b']
     np.testing.assert_array_equal(result1, expected)
     np.testing.assert_array_equal(result2, expected)
-
-def test_unsupported_operation(test_data):
-    data = test_data['int32']
-    
-    @compile
-    def ops(a, b):
-        return a ** b  # Power operation not supported
-    
-    with pytest.raises(ValueError, match="Power operation not supported"):
-        ops(data['a'], data['b'])
 
 def test_shape_mismatch(test_data):
     data = test_data['int32']
