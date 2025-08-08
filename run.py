@@ -2,12 +2,12 @@ import numpy as np
 from numpyler import compile
 
 @compile
-def eq(a, b, c, d):
+def tensor_sum(a, b, c, d):
     return np.add(a, np.multiply(b,c)) / d
 
-a = np.array([1,2,4,8], dtype=np.float64)
-b = np.array([2,4,8,16], dtype=np.float64)
-c = np.array([3,6,12,24], dtype=np.float64)
-d = np.array([4,8,16,32], dtype=np.float64)
+a = np.array([[1.5, 2.1], [3.8, 4.6]], dtype=np.float64)
+b = np.array([[2.9, 3.6], [4.4, 5.6]], dtype=np.float64)
+c = np.array([[5.2, 6.5], [7.1, 8.4]], dtype=np.float64)
+d = np.array([[1.8, 2.4], [3.6, 4.7]], dtype=np.float64)
 
-print(eq(a,b,c,d))
+print(tensor_sum(a,b,c,d))
