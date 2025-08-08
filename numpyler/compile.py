@@ -64,7 +64,7 @@ def compile(func):
             func_name, index_map
         )
 
-        print(ir_code)
+        # print(ir_code)
         
         # Create compiled function
         def compiled_func(*runtime_args):
