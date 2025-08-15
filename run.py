@@ -3,7 +3,7 @@ from numpyler import compile
 
 @compile
 def equation(a, b):
-    res = np.add(a,b)
+    res = np.dot(a,b)
     return res
 
 a = np.array([[1, 2], [3, 4]], dtype=np.float64)

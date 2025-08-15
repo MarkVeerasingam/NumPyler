@@ -6,7 +6,7 @@ from functools import wraps
 from numpyler.numpyir.tracing import TracedArray, collect_nodes
 from numpyler.compiler.runner import compile_and_run
 from numpyler.runtime import numpy_to_memref
-from numpyler.numpyir.ir_generation import generate_fused_ir_multidim
+from numpyler.numpyir.ir_generation import generate_fused_ir_multidim  
 
 _compile_cache = {}
 

@@ -29,54 +29,33 @@ class TracedArray:
         self.original_index = original_index
         self.id = id(self)
         
-    # Add operator overloads to ensure ufuncs are called
-    def __add__(self, other):
-        return np.add(self, other)
-    
-    def __sub__(self, other):
-        return np.subtract(self, other)
-    
-    def __mul__(self, other):
-        return np.multiply(self, other)
-    
-    def __truediv__(self, other):
-        return np.divide(self, other)
-    
-    def __rtruediv__(self, other):
-        return np.divide(other, self)
-    
-    def __radd__(self, other):
-        return np.add(other, self)
-    
-    def __rsub__(self, other):
-        return np.subtract(other, self)
-    
-    def __rmul__(self, other):
-        return np.multiply(other, self)
+    def __add__(self, other): return np.add(self, other)
+    def __sub__(self, other): return np.subtract(self, other)
+    def __mul__(self, other): return np.multiply(self, other)
+    def __truediv__(self, other): return np.divide(self, other)
+    def __rtruediv__(self, other): return np.divide(other, self)
+    def __radd__(self, other): return np.add(other, self)
+    def __rsub__(self, other): return np.subtract(other, self)
+    def __rmul__(self, other): return np.multiply(other, self)
     
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         if method != '__call__':
             return NotImplemented
         
-        # Handle dot separately because it's not a ufunc - temp fix i think
-        # when i compile for np.dot it comes back as element wise. e.g..
-        # %".12" = getelementptr {i8*, i8*, i64, i64, [8 x i64], [8 x i64]}, {i8*, i8*, i64, i64, [8 x i64], [8 x i64]}* %".2", i32 0, i32 1
-        # It needs to come back as a matrix mul as this is the exact same as np.multiply
-        if ufunc == np.dot:
-            # inputs expected to be two arrays
-            a, b = inputs
-            # wrap inputs if they aren't TracedArray
-            a_traced = a if isinstance(a, TracedArray) else TracedArray(a)
-            b_traced = b if isinstance(b, TracedArray) else TracedArray(b)
-            node = TraceNode('dot', [a_traced, b_traced], kwargs)
-            result_data = np.dot(a_traced.data, b_traced.data)
-            result_traced = TracedArray(result_data, trace_node=node)
-            node.result = result_traced
-            return result_traced
+        # Convert non-TracedArray inputs to TracedArray
+        inputs = [
+            x if isinstance(x, TracedArray) 
+            else TracedArray(x) 
+            for x in inputs
+        ]
 
-        # Unwrap inputs while preserving originals
-        unwrapped_inputs = []
-        raw_inputs = []
+        if ufunc is np.dot:
+            a, b = inputs
+            node = TraceNode('dot', [a, b], kwargs)
+            result_data = np.dot(a.data, b.data)  # Use original np.dot
+            return TracedArray(result_data, trace_node=node)
+
+        unwrapped_inputs, raw_inputs = [], []
         for x in inputs:
             if isinstance(x, TracedArray):
                 unwrapped_inputs.append(x)
@@ -85,20 +64,8 @@ class TracedArray:
                 unwrapped_inputs.append(x)
                 raw_inputs.append(x)
 
-        # Compute concrete result with numpy ufunc (everything is elementwise right now)
-        # I am not sure why it comes back all as element wise but i suspect it is how i currently am tracing and building IR with llvmlite
-        # primatives like builder.add, .sub, .div, are only supported I need to create my optimizations to achieve matrix opts
-        # I think I should create my own numpyir that lowers to llvm_ir
-        # when i do np.add, np.sub, np.mul it will have its ownoptimization than lower to llvm ir
-        # compile stages: python -> numpyler ir (numpyir) -> llvm ir (llvmlite).
         result_data = ufunc(*raw_inputs, **kwargs)
-        
-        # Create new trace node
-        node = TraceNode(
-            op_name=ufunc.__name__,
-            inputs=unwrapped_inputs,
-            kwargs=kwargs
-        )
+        node = TraceNode(ufunc.__name__, unwrapped_inputs, kwargs)
         result_traced = TracedArray(result_data, trace_node=node)
         node.result = result_traced
         return result_traced
@@ -109,22 +76,15 @@ class TracedArray:
         return self.data
 
 def collect_nodes(root_node):
-    """Collect all nodes in computation graph in topological order"""
-    nodes = []
-    visited = set()
-    
+    nodes, visited = [], set()
     def visit(node):
         if node.id in visited:
             return
         visited.add(node.id)
-        
-        # Process inputs first (depth-first)
         for inp in node.inputs:
             if isinstance(inp, TracedArray) and inp.trace_node is not None:
                 visit(inp.trace_node)
-                
         nodes.append(node)
-    
     if isinstance(root_node, TracedArray) and root_node.trace_node:
         visit(root_node.trace_node)
     return nodes
