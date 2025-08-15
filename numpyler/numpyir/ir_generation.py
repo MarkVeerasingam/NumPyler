@@ -1,6 +1,6 @@
 # numpyler/compiler/ir_generation.py
 import numpy as np
-from numpyler.tracing import TracedArray
+from numpyler.numpyir.tracing import TracedArray
 from llvmlite import ir
 from llvmlite.binding import get_default_triple
 
@@ -66,16 +66,16 @@ def generate_fused_ir_multidim(nodes, leaf_arrays, output_dtype, output_shape, f
                 input_vals.append(ir.Constant(llvm_type, inp))
         
         if node.op_name == "add":
-            res = builder.add(input_vals[0], input_vals[1]) if isinstance(llvm_type, ir.IntType) else builder.fadd(input_vals[0], input_vals[1])
+            res = builder.fadd(input_vals[0], input_vals[1])
         elif node.op_name == "multiply":
-            res = builder.mul(input_vals[0], input_vals[1]) if isinstance(llvm_type, ir.IntType) else builder.fmul(input_vals[0], input_vals[1])
+            res = builder.fmul(input_vals[0], input_vals[1])
         elif node.op_name == "subtract":
-            res = builder.sub(input_vals[0], input_vals[1]) if isinstance(llvm_type, ir.IntType) else builder.fsub(input_vals[0], input_vals[1])
+            res = builder.fsub(input_vals[0], input_vals[1])
         elif node.op_name == "divide":
             res = builder.fdiv(input_vals[0], input_vals[1])
-        
+            
         node_registers[node.id] = res
-    
+        
     out_aligned = builder.load(builder.gep(func.args[-1], [ir.Constant(int32, 0), ir.Constant(int32, 1)]))
     builder.store(node_registers[nodes[-1].id], builder.gep(builder.bitcast(out_aligned, llvm_type.as_pointer()), [phi]))
     

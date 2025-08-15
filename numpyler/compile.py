@@ -1,13 +1,12 @@
 # numpyler/compile.py
 from collections import OrderedDict
-import time
 import hashlib
 import numpy as np
 from functools import wraps
-from numpyler.tracing import TracedArray, collect_nodes
+from numpyler.numpyir.tracing import TracedArray, collect_nodes
 from numpyler.compiler.runner import compile_and_run
 from numpyler.runtime import numpy_to_memref
-from numpyler.compiler.ir_generation import generate_fused_ir_multidim
+from numpyler.numpyir.ir_generation import generate_fused_ir_multidim
 
 _compile_cache = {}
 
@@ -63,9 +62,8 @@ def compile(func):
             result.data.dtype, result.data.shape, 
             func_name, index_map
         )
-
-        print(ir_code)
         
+        print(ir_code)
         # Create compiled function
         def compiled_func(*runtime_args):
             input_arrays = [runtime_args[leaf.original_index] for leaf in leaf_arrays.values()]
