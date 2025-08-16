@@ -1,7 +1,7 @@
 # numpyler/compiler/runner.py
 import ctypes
 import llvmlite.binding as llvm
-from numpyler.runtime import MemRefDescriptor
+from numpyler.runtime import ArrayDescriptor
 
 _llvm_initialized = False
 _engine_cache = {}
@@ -40,21 +40,21 @@ def get_cached_engine_and_function(ir_code, func_name, num_args):
     engine = create_execution_engine()
     func_ptr = compile_ir(engine, ir_code, func_name)
     
-    # Create function type with correct number of arguments
-    cfunc_type = ctypes.CFUNCTYPE(None, *([ctypes.POINTER(MemRefDescriptor)] * num_args))
+    # Create function type with simplified array descriptors
+    cfunc_type = ctypes.CFUNCTYPE(None, *([ctypes.POINTER(ArrayDescriptor)] * num_args))
     cfunc = cfunc_type(func_ptr)
     
     _engine_cache[func_name] = (engine, cfunc)
     return _engine_cache[func_name]
 
-def compile_and_run(input_memrefs, out_memref, ir_code, func_name):
+def compile_and_run(input_descriptors, out_descriptor, ir_code, func_name):
     # Total arguments = inputs + output
-    num_args = len(input_memrefs) + 1
+    num_args = len(input_descriptors) + 1
     engine, cfunc = get_cached_engine_and_function(ir_code, func_name, num_args)
     
     # Prepare arguments: inputs first, then output
-    args = [ctypes.byref(memref) for memref in input_memrefs]
-    args.append(ctypes.byref(out_memref))
+    args = [ctypes.byref(desc) for desc in input_descriptors]
+    args.append(ctypes.byref(out_descriptor))
     
     # Call the function
     cfunc(*args)

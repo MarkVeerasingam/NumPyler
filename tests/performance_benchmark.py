@@ -27,6 +27,10 @@ def fused_ops5(a, b, c):
 def fused_ops6(a, b):
     return np.add(np.multiply(a, 1.5), np.divide(b, 2.0))
 
+@compile
+def fused_ops7(a, b):
+    return np.dot(a=np.array([[1,0], [0,1]], dtype=np.float64),b=np.array([[4,1], [2,2]], dtype=np.float64))
+
 # Equivalent NumPy functions using same ufuncs
 def np_ops1(a, b, c):
     return np.add(a, np.multiply(b, c))
@@ -46,6 +50,10 @@ def np_ops5(a, b, c):
 def np_ops6(a, b):
     return np.add(np.multiply(a, 1.5), np.divide(b, 2.0))
 
+def np_ops7(a, b):
+    return np.dot(a=np.array([[1,0], [0,1]], dtype=np.float64),b=np.array([[4,1], [2,2]], dtype=np.float64))
+
+
 # Inputs
 N = 10**7
 a = np.random.randint(1, 100, size=N).astype(np.float64)
@@ -61,6 +69,7 @@ tests = [
     ("fused_ops4", fused_ops4, np_ops4, (a,)),
     ("fused_ops5", fused_ops5, np_ops5, (a, b, c)),
     ("fused_ops6", fused_ops6, np_ops6, (a, b)),
+    ("fused_ops7", fused_ops7, np_ops7, (a, b)),
 ]
 
 def run_benchmark(name, compiled_fn, numpy_fn, args):

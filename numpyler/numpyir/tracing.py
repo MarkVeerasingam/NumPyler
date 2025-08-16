@@ -42,18 +42,13 @@ class TracedArray:
         if method != '__call__':
             return NotImplemented
         
+        print(f"DEBUG: ufunc={ufunc}, name={ufunc.__name__}")  
+            
         # Convert non-TracedArray inputs to TracedArray
         inputs = [
-            x if isinstance(x, TracedArray) 
-            else TracedArray(x) 
+            x if isinstance(x, TracedArray) else TracedArray(x)
             for x in inputs
         ]
-
-        if ufunc is np.dot:
-            a, b = inputs
-            node = TraceNode('dot', [a, b], kwargs)
-            result_data = np.dot(a.data, b.data)  # Use original np.dot
-            return TracedArray(result_data, trace_node=node)
 
         unwrapped_inputs, raw_inputs = [], []
         for x in inputs:
@@ -69,6 +64,20 @@ class TracedArray:
         result_traced = TracedArray(result_data, trace_node=node)
         node.result = result_traced
         return result_traced
+    
+    def __array_function__(self, func, types, args, kwargs):
+        if func is np.dot:
+            print("DEBUG: Found np.dot operation")
+            a, b = args[0], args[1]
+            # Compute result data for shape/dtype info
+            a_data = a.data if isinstance(a, TracedArray) else a
+            b_data = b.data if isinstance(b, TracedArray) else b
+            result_data = np.dot(a_data, b_data)
+            
+            # Create trace node
+            node = TraceNode('dot', [a, b], kwargs)
+            return TracedArray(result_data, trace_node=node)
+        return NotImplemented
 
     def realize(self):
         if isinstance(self.data, (int, float, np.integer, np.floating)):

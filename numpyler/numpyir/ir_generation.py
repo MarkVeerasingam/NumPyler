@@ -1,18 +1,21 @@
-# numpyler/numpyir/ir_generation.py
 import numpy as np
 from numpyler.numpyir.tracing import TracedArray
 from llvmlite import ir
 from llvmlite.binding import get_default_triple
-from numpyler.numpyir.memref_utils import memref_type, get_aligned_ptr, get_size, get_stride, dtype_to_llvm
+from numpyler.numpyir.memref_utils import (
+    array_descriptor_type, get_data_ptr, get_size, get_shape_dim, 
+    get_stride_dim, dtype_to_llvm
+)
 from numpyler.numpyir.ops.matmul_ir import generate_matmul_ir
 
 def detect_matmul_pattern(nodes):
-    return len(nodes) == 1 
+    return len(nodes) == 1 and nodes[0].op_name == "dot"
 
 def generate_fused_ir_multidim(nodes, leaf_arrays, output_dtype, output_shape, func_name, index_map):
     if detect_matmul_pattern(nodes):
         return generate_matmul_ir(nodes[0], leaf_arrays, output_dtype, output_shape, func_name, index_map)
-    return generate_elementwise_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name, index_map)
+    else:
+        return generate_elementwise_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name, index_map)
 
 def generate_elementwise_ir(nodes, leaf_arrays, output_dtype, output_shape, func_name, index_map):
     module = ir.Module(name=func_name)
@@ -20,14 +23,10 @@ def generate_elementwise_ir(nodes, leaf_arrays, output_dtype, output_shape, func
     
     int64 = ir.IntType(64)
     int32 = ir.IntType(32)
-    int8ptr = ir.IntType(8).as_pointer()
     
-    memref_type_def = ir.LiteralStructType([
-        int8ptr, int8ptr, int64, int64,
-        ir.ArrayType(int64, 8), ir.ArrayType(int64, 8)
-    ])
+    array_desc_type = array_descriptor_type()
     
-    arg_types = [memref_type_def.as_pointer() for _ in range(len(leaf_arrays) + 1)]
+    arg_types = [array_desc_type.as_pointer() for _ in range(len(leaf_arrays) + 1)]
     func = ir.Function(module, ir.FunctionType(ir.VoidType(), arg_types), name=func_name)
     
     entry = func.append_basic_block("entry")
@@ -47,8 +46,9 @@ def generate_elementwise_ir(nodes, leaf_arrays, output_dtype, output_shape, func
     for i, arg in enumerate(func.args[:-1]):
         input_dtype = leaf_arrays[i].data.dtype
         input_llvm_type = dtype_to_llvm(input_dtype)
-        aligned = builder.load(builder.gep(arg, [ir.Constant(int32, 0), ir.Constant(int32, 1)]))
-        val = builder.load(builder.gep(builder.bitcast(aligned, input_llvm_type.as_pointer()), [phi]))
+        data_ptr = get_data_ptr(builder, arg)
+        typed_ptr = builder.bitcast(data_ptr, input_llvm_type.as_pointer())
+        val = builder.load(builder.gep(typed_ptr, [phi]))
         input_values.append(val)
     
     node_registers = {}
@@ -60,8 +60,22 @@ def generate_elementwise_ir(nodes, leaf_arrays, output_dtype, output_shape, func
                     input_vals.append(node_registers[inp.trace_node.id])
                 elif inp.original_index is not None:
                     input_vals.append(input_values[index_map[inp.original_index]])
-            elif isinstance(inp, (int, float)):
-                input_vals.append(ir.Constant(llvm_type, inp))
+                else:
+                    if isinstance(inp.data, (int, float, np.integer, np.floating)):
+                        input_vals.append(ir.Constant(llvm_type, float(inp.data)))
+                    elif inp.data.ndim == 0:
+                        input_vals.append(ir.Constant(llvm_type, float(inp.data.item())))
+            elif isinstance(inp, (int, float, np.integer, np.floating)):
+                input_vals.append(ir.Constant(llvm_type, float(inp)))
+        
+        if len(input_vals) < 2 and node.op_name in ["add", "multiply", "subtract", "divide"]:
+            print(f"ERROR: Node {node.op_name} has {len(input_vals)} inputs: {node.inputs}")
+            for i, inp in enumerate(node.inputs):
+                if isinstance(inp, TracedArray):
+                    print(f"  Input {i}: TracedArray, trace_node={inp.trace_node is not None}, original_index={inp.original_index}, data={inp.data}")
+                else:
+                    print(f"  Input {i}: {type(inp)}, value={inp}")
+            raise RuntimeError(f"Binary operation {node.op_name} requires exactly 2 inputs, got {len(input_vals)}")
         
         if node.op_name == "add":
             res = builder.fadd(input_vals[0], input_vals[1])
@@ -76,9 +90,9 @@ def generate_elementwise_ir(nodes, leaf_arrays, output_dtype, output_shape, func
         
         node_registers[node.id] = res
     
-    out_aligned = builder.load(builder.gep(func.args[-1], [ir.Constant(int32, 0), ir.Constant(int32, 1)]))
-    builder.store(node_registers[nodes[-1].id], 
-                 builder.gep(builder.bitcast(out_aligned, llvm_type.as_pointer()), [phi]))
+    out_data_ptr = get_data_ptr(builder, func.args[-1])
+    out_typed_ptr = builder.bitcast(out_data_ptr, llvm_type.as_pointer())
+    builder.store(node_registers[nodes[-1].id], builder.gep(out_typed_ptr, [phi]))
     
     i_next = builder.add(phi, ir.Constant(int64, 1))
     phi.add_incoming(i_next, builder.block)

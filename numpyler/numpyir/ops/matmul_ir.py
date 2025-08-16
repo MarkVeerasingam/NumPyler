@@ -1,34 +1,37 @@
 # numpyler/numpyir/ops/matmul_ir.py
 from llvmlite import ir
 from llvmlite.binding import get_default_triple
-from numpyler.numpyir.memref_utils import memref_type, get_aligned_ptr, get_size, get_stride, dtype_to_llvm
+from numpyler.numpyir.memref_utils import (
+    array_descriptor_type, get_data_ptr, get_shape_dim, 
+    get_stride_dim, dtype_to_llvm
+)
 
 def generate_matmul_inline(builder, func, A_arg, B_arg, C_arg, elem_type):
     """Generate inline matrix multiplication IR within an existing function"""
     i32 = ir.IntType(32)
     i64 = ir.IntType(64)
     
-    # Get aligned pointers and cast to element type
-    A_aligned = get_aligned_ptr(builder, A_arg)
-    B_aligned = get_aligned_ptr(builder, B_arg)
-    C_aligned = get_aligned_ptr(builder, C_arg)
+    # Get data pointers and cast to element type
+    A_data = get_data_ptr(builder, A_arg)
+    B_data = get_data_ptr(builder, B_arg)
+    C_data = get_data_ptr(builder, C_arg)
     
-    A_ptr = builder.bitcast(A_aligned, elem_type.as_pointer())
-    B_ptr = builder.bitcast(B_aligned, elem_type.as_pointer())
-    C_ptr = builder.bitcast(C_aligned, elem_type.as_pointer())
+    A_ptr = builder.bitcast(A_data, elem_type.as_pointer())
+    B_ptr = builder.bitcast(B_data, elem_type.as_pointer())
+    C_ptr = builder.bitcast(C_data, elem_type.as_pointer())
     
     # Get dimensions
-    M = get_size(builder, A_arg, 0)  # A.shape[0]
-    K = get_size(builder, A_arg, 1)  # A.shape[1]
-    N = get_size(builder, B_arg, 1)  # B.shape[1]
+    M = get_shape_dim(builder, A_arg, 0)  # A.shape[0]
+    K = get_shape_dim(builder, A_arg, 1)  # A.shape[1]
+    N = get_shape_dim(builder, B_arg, 1)  # B.shape[1]
     
     # Get strides
-    As0 = get_stride(builder, A_arg, 0)
-    As1 = get_stride(builder, A_arg, 1)
-    Bs0 = get_stride(builder, B_arg, 0)
-    Bs1 = get_stride(builder, B_arg, 1)
-    Cs0 = get_stride(builder, C_arg, 0)
-    Cs1 = get_stride(builder, C_arg, 1)
+    As0 = get_stride_dim(builder, A_arg, 0)
+    As1 = get_stride_dim(builder, A_arg, 1)
+    Bs0 = get_stride_dim(builder, B_arg, 0)
+    Bs1 = get_stride_dim(builder, B_arg, 1)
+    Cs0 = get_stride_dim(builder, C_arg, 0)
+    Cs1 = get_stride_dim(builder, C_arg, 1)
     
     # Create loop blocks
     loop_i = func.append_basic_block("matmul_loop_i")
@@ -136,9 +139,9 @@ def generate_matmul_ir(dot_node, leaf_arrays, output_dtype, output_shape, func_n
     module = ir.Module(name=func_name)
     module.triple = get_default_triple()
     
-    # Create function signature: void func(memref* A, memref* B, memref* C)
-    memref_ptr_type = memref_type().as_pointer()
-    func_type = ir.FunctionType(ir.VoidType(), [memref_ptr_type, memref_ptr_type, memref_ptr_type])
+    # Create function signature: void func(array_desc* A, array_desc* B, array_desc* C)
+    array_desc_ptr_type = array_descriptor_type().as_pointer()
+    func_type = ir.FunctionType(ir.VoidType(), [array_desc_ptr_type, array_desc_ptr_type, array_desc_ptr_type])
     func = ir.Function(module, func_type, name=func_name)
     
     A_arg, B_arg, C_arg = func.args

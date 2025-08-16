@@ -1,39 +1,32 @@
+# numpyler/runtime.py
 import numpy as np
-from ctypes import c_void_p, c_longlong, Structure
+from ctypes import c_void_p, c_longlong, Structure, POINTER, c_int64, c_double, c_float, c_int32
 
-MAX_DIMS = 8  # Support up to 8 dimensions
-
-class MemRefDescriptor(Structure):
+class ArrayDescriptor(Structure):
+    """Simplified array descriptor that directly exposes NumPy array properties"""
     _fields_ = [
-        ("allocated", c_void_p),
-        ("aligned", c_void_p),
-        ("offset", c_longlong),
-        ("rank", c_longlong),  # Number of dimensions
-        ("shape", c_longlong * MAX_DIMS),
-        ("stride", c_longlong * MAX_DIMS),
+        ("data", c_void_p),
+        ("size", c_longlong),
+        ("ndim", c_longlong),
+        ("shape", POINTER(c_longlong)),
+        ("strides", POINTER(c_longlong)),
     ]
 
-def numpy_to_memref(arr: np.ndarray) -> MemRefDescriptor:
+def numpy_to_descriptor(arr: np.ndarray) -> ArrayDescriptor:
+    """Convert NumPy array to simplified descriptor"""
     if not arr.flags["C_CONTIGUOUS"]:
         arr = np.ascontiguousarray(arr)
     
-    if arr.ndim > MAX_DIMS:
-        raise ValueError(f"Array has {arr.ndim} dimensions, but only up to {MAX_DIMS} are supported")
+    desc = ArrayDescriptor()
+    desc.data = arr.ctypes.data_as(c_void_p)
+    desc.size = arr.size
+    desc.ndim = arr.ndim
     
-    desc = MemRefDescriptor()
-    desc.allocated = arr.ctypes.data_as(c_void_p)
-    desc.aligned = desc.allocated
-    desc.offset = 0
-    desc.rank = arr.ndim
+    # Convert shape and strides to ctypes arrays
+    shape_array = (c_longlong * arr.ndim)(*arr.shape)
+    stride_array = (c_longlong * arr.ndim)(*(s // arr.itemsize for s in arr.strides))
     
-    # Set shape and strides
-    for i in range(arr.ndim):
-        desc.shape[i] = arr.shape[i]
-        desc.stride[i] = arr.strides[i] // arr.itemsize  # Convert byte strides to element strides
+    desc.shape = shape_array
+    desc.strides = stride_array
     
-    # Zero out unused dimensions
-    for i in range(arr.ndim, MAX_DIMS):
-        desc.shape[i] = 0
-        desc.stride[i] = 0
-    
-    return desc
+    return desc, shape_array, stride_array

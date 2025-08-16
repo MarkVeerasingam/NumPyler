@@ -5,7 +5,7 @@ import numpy as np
 from functools import wraps
 from numpyler.numpyir.tracing import TracedArray, collect_nodes
 from numpyler.compiler.runner import compile_and_run
-from numpyler.runtime import numpy_to_memref
+from numpyler.runtime import numpy_to_descriptor
 from numpyler.numpyir.ir_generation import generate_fused_ir_multidim  
 
 _compile_cache = {}
@@ -64,14 +64,28 @@ def compile(func):
         )
         
         print(ir_code)
+        
         # Create compiled function
         def compiled_func(*runtime_args):
             input_arrays = [runtime_args[leaf.original_index] for leaf in leaf_arrays.values()]
             out = np.empty(result.data.shape, dtype=result.data.dtype)
             
+            # Convert to descriptors
+            input_descriptors = []
+            shape_arrays = []  # Keep alive
+            stride_arrays = []  # Keep alive
+            
+            for arr in input_arrays:
+                desc, shape, strides = numpy_to_descriptor(arr)
+                input_descriptors.append(desc)
+                shape_arrays.append(shape)
+                stride_arrays.append(strides)
+            
+            out_desc, out_shape, out_strides = numpy_to_descriptor(out)
+            
             compile_and_run(
-                [numpy_to_memref(arr) for arr in input_arrays],
-                numpy_to_memref(out),
+                input_descriptors,
+                out_desc,
                 ir_code=ir_code,
                 func_name=func_name
             )
